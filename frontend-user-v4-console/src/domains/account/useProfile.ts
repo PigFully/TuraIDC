@@ -218,6 +218,11 @@ export function useProfile() {
       MessagePlugin.warning('请输入新密码');
       return;
     }
+    // 这里此前只判空。后端 ResetPasswordRequest 是 min:8，短密码会一路发出去再被 422 打回。
+    if (resetForm.password.length < 8) {
+      MessagePlugin.warning('密码长度不能少于 8 位');
+      return;
+    }
     if (resetForm.password !== resetForm.confirmPassword) {
       MessagePlugin.warning('两次密码输入不一致');
       return;
@@ -478,6 +483,11 @@ export function useProfile() {
   async function changePassword() {
     if (!passwordForm.oldPassword || !passwordForm.newPassword) {
       MessagePlugin.warning('请填写完整密码信息');
+      return;
+    }
+    // 与 submitResetPassword 同口径：后端 UpdatePasswordRequest 的 newPassword 是 min:8。
+    if (passwordForm.newPassword.length < 8) {
+      MessagePlugin.warning('新密码长度不能少于 8 位');
       return;
     }
     if (passwordForm.newPassword !== passwordForm.confirmPassword) {
