@@ -16,6 +16,7 @@ use App\Models\Product;
 use App\Services\ProductCatalog\ProductDisplayNameResolver;
 use App\Services\ProductCatalog\ProductFullPathResolver;
 use App\Support\AdminPrivacy;
+use App\Support\SqlIdentifier;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder;
@@ -309,6 +310,11 @@ class AdminFinanceQueryService
 
     private function countsByDay(string $table, string $column, CarbonImmutable $start, CarbonImmutable $end, array $conditions = []): array
     {
+        // 表名/列名进 SQL 文本无法参数绑定，必须过标识符白名单（当前调用点均为
+        // 硬编码常量，校验是把「靠调用者自律」变成显式防线）。
+        SqlIdentifier::assertSafe($table, '统计表名');
+        SqlIdentifier::assertSafe($column, '统计列名');
+
         $query = DB::table($table)
             ->selectRaw("DATE({$column}) as day, COUNT(*) as total")
             ->whereBetween($column, [$start, $end]);

@@ -21,6 +21,7 @@ use App\Services\Verification\Data\VerificationStatusResult;
 use App\Services\Verification\VerificationDriverManager;
 use App\Support\PublicUrl;
 use App\Support\SensitiveDataSanitizer;
+use App\Support\TextSanitizer;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -86,7 +87,9 @@ class VerificationService
 
             $updatedUser = $this->persistVerificationState($user, [
                 'verification_status' => self::RESULT_STATUS_PENDING,
-                'real_name' => $realname,
+                // 实名姓名是用户可写、管理端可见的文本，与管理端改实名、资料
+                // 实名两个入口同口径过入口净化，堵住唯一的漏网字段。
+                'real_name' => TextSanitizer::clean($realname),
                 'id_card' => $idcard,
                 'certify_id' => $certifyId,
                 'verification_message' => '等待认证',

@@ -19,6 +19,7 @@ use App\Models\User;
 use App\Services\Integrations\Plugins\PluginBindingResolver;
 use App\Support\AdminPrivacy;
 use App\Support\ServiceHostname;
+use App\Support\SqlIdentifier;
 use App\Support\VersionedJson;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
@@ -1005,6 +1006,9 @@ class FinanceLedgerQueryService
 
     private function normalizedEventTypeSql(string $column): string
     {
+        // 列名插值进 CASE 表达式无法参数绑定，过标识符白名单（调用点均为硬编码常量）。
+        SqlIdentifier::assertSafeQualified($column, '流水事件列名');
+
         return "CASE
             WHEN {$column} = 'consume' THEN ?
             WHEN {$column} = 'refund' THEN ?
