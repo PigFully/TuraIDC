@@ -17,6 +17,7 @@ use App\Services\ProductCatalog\ProductDisplayNameResolver;
 use App\Services\ProductCatalog\ProductSpecHighlightService;
 use App\Services\System\UploadedAssetReferenceService;
 use App\Support\DatabaseSchema;
+use App\Support\Waf\Firewall;
 use Carbon\CarbonInterface;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Database\Events\MigrationsEnded;
@@ -75,6 +76,13 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(PluginBindingResolver::class);
         $this->app->singleton(ProductDisplayNameResolver::class);
         $this->app->singleton(ProductSpecHighlightService::class);
+
+        // WAF 引擎：规则库从配置注入而非在类内读 config()，这样引擎既可单测也可在
+        // 别处复用。singleton 让规则数组只解析一次，避免每个请求重复拷贝。
+        $this->app->singleton(
+            Firewall::class,
+            static fn ($app): Firewall => new Firewall((array) $app['config']->get('waf.rules', []))
+        );
     }
 
     public function boot(): void
