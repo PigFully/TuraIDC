@@ -332,7 +332,7 @@ class FinanceLedgerQueryService
 
         if (! empty($filters['invoice_no'])) {
             $invoiceIds = Invoice::query()
-                ->where('invoice_no', 'like', '%'.trim((string) $filters['invoice_no']).'%')
+                ->where('invoice_no', 'like', SqlLike::contains(trim((string) $filters['invoice_no'])))
                 ->pluck('id');
             $paymentIds = Payment::query()->whereIn('invoice_id', $invoiceIds)->pluck('id');
 
@@ -347,7 +347,7 @@ class FinanceLedgerQueryService
 
         if (! empty($filters['payment_no'])) {
             $paymentIds = Payment::query()
-                ->where('payment_no', 'like', '%'.trim((string) $filters['payment_no']).'%')
+                ->where('payment_no', 'like', SqlLike::contains(trim((string) $filters['payment_no'])))
                 ->pluck('id');
             $invoiceIds = Payment::query()->whereIn('id', $paymentIds)->whereNotNull('invoice_id')->pluck('invoice_id');
 

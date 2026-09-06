@@ -142,11 +142,13 @@ final class WafMiddlewareTest extends TestCase
             return response()->json(['ok' => true]);
         });
 
-        $this->postJson('/api/__waf_fold_probe', [
+        $response = $this->postJson('/api/__waf_fold_probe', [
             'amount' => '100',
             'amount<' => '0',
         ]);
 
+        // 同时断言响应形态：若路由 404/500 也可能让探针为 null，假通过会被这里拦下。
+        $response->assertStatus(400)->assertJsonPath('code', 40009);
         self::assertNull($captured, '键名折叠冲突的请求穿透到了业务探针');
     }
 
