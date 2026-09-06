@@ -22,9 +22,13 @@ use Symfony\Component\HttpFoundation\Response;
  *
  * 分两层，顺序不可颠倒：
  *
- *  L1 键名净化（改写请求）：中和数组键里的注入字符。详见 KeySanitizer。
- *     放在检测之前，避免规则库因键名里的花活而漏判。
+ *  L1 键名检测（只拒绝、不改写）：中和数组键里的注入字符的思路被否决——删字符
+ *     会把 `amount<` 与 `amount` 折叠成同一个键，攻击载荷借此覆盖正常业务值。
+ *     检测到脏键（或嵌套超深无法证明干净）即整体拒绝，详见 KeySanitizer。
+ *     放在检测之前，避免带脏键的请求进入规则匹配消耗资源。
  *  L2 规则检测（只拒绝、不改写）：命中攻击特征即拒绝，返回 40009。
+ *     超长、超深、无效编码等无法完整检查的情形由引擎按 fatal_rules 固定规则
+ *     拒绝（fail-closed），详见 Firewall。
  *
  * ⚠ 为什么**不**做全局的「值」净化（这是与 acg-faka 最重要的分歧）：
  *
@@ -63,7 +67,22 @@ class WebApplicationFirewall
             return $next($request);
         }
 
-        $this->sanitizeKeys($request);
+        if ($this->hasDirtyKeys($request)) {
+            if (config('waf.log_hits', true)) {
+                Log::warning('WAF 拦截到异常请求键名', [
+                    'method' => $request->method(),
+                    'path' => $request->getPathInfo(),
+                    'ip' => $request->ip(),
+                ]);
+            }
+
+            // 观察模式：只记录不拦截，用于上线初期确认无误伤。
+            if (config('waf.observe_only', false)) {
+                return $next($request);
+            }
+
+            return ApiResponseBuilder::error(40009, '请求包含不安全的内容，已被拦截', null, 400);
+        }
 
         $hit = $this->firewall->inspect($request);
 
@@ -84,45 +103,19 @@ class WebApplicationFirewall
     }
 
     /**
-     * L1：净化请求各输入袋的键名。
+     * L1：检测请求各输入袋的键名，任何脏键即拒绝整个请求（只拒绝、不改写）。
      *
-     * 三处都要处理，漏一处即失效：query（?a=1）、request（表单体）、json（JSON 体）。
-     * 用 replace() 整体替换而非 merge()——merge 只会添加，脏键仍在袋中。
+     * 三处都要检查，漏一处即失效：query（?a=1）、request（表单体）、json（JSON 体）。
      *
-     * 对正常请求这是恒等变换（合法键名不含被剔除的字符），因此不会影响任何既有
-     * 功能；命中改写说明请求里确实有异常键名，记一条日志便于观测。
+     * 合法键名不含被禁止的字符，因此正常请求恒为阴性；命中即说明请求里确实
+     * 有异常键名。绝不做「删字符后放行」——删字符会把 `amount<` 折叠成 `amount`，
+     * 攻击载荷借此覆盖正常业务值（见 KeySanitizer 类注释）。
      */
-    private function sanitizeKeys(Request $request): void
+    private function hasDirtyKeys(Request $request): bool
     {
-        $dirty = false;
-
-        $query = $request->query->all();
-        if ($this->keySanitizer->hasDirtyKey($query)) {
-            $request->query->replace($this->keySanitizer->sanitize($query));
-            $dirty = true;
-        }
-
-        $body = $request->request->all();
-        if ($this->keySanitizer->hasDirtyKey($body)) {
-            $request->request->replace($this->keySanitizer->sanitize($body));
-            $dirty = true;
-        }
-
-        if ($request->isJson()) {
-            $json = $request->json()->all();
-            if ($this->keySanitizer->hasDirtyKey($json)) {
-                $request->json()->replace($this->keySanitizer->sanitize($json));
-                $dirty = true;
-            }
-        }
-
-        if ($dirty && config('waf.log_hits', true)) {
-            Log::warning('WAF 净化了异常的请求键名', [
-                'method' => $request->method(),
-                'path' => $request->getPathInfo(),
-                'ip' => $request->ip(),
-            ]);
-        }
+        return $this->keySanitizer->hasDirtyKey($request->query->all())
+            || $this->keySanitizer->hasDirtyKey($request->request->all())
+            || ($request->isJson() && $this->keySanitizer->hasDirtyKey($request->json()->all()));
     }
 
     /**
@@ -131,8 +124,8 @@ class WebApplicationFirewall
      * 富文本正文、工单内容、上游回调等本就可能包含"像攻击载荷"的合法文本，
      * 必须放行，否则必然误伤真实业务。
      *
-     * 对键名净化而言这层豁免是**双保险**：回调报文的键名由对端决定且参与验签，
-     * 即便净化对它们实际上是恒等变换，也不在这条路径上冒任何改写请求的风险。
+     * 对键名检测而言这层豁免是**双保险**：回调报文的键名由对端决定且参与验签，
+     * 即便键名检测对它们实际上是阴性，也不在这条路径上冒任何拒绝报文的风险。
      */
     private function isExcepted(Request $request): bool
     {

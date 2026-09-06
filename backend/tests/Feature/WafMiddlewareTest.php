@@ -104,12 +104,11 @@ final class WafMiddlewareTest extends TestCase
     }
 
     /**
-     * L1 键名净化在真实管线中生效：带注入字符的键名到达控制器时已被中和。
-     *
-     * 用 /api/health 打点并直接断言到达业务的 Request——它不依赖数据库，
-     * 能把断言聚焦在"键名是否被改写"本身。
+     * L1 键名检测在真实管线中生效：带注入字符的键名会被整体拒绝（40009），
+     * 业务探针绝不执行。键名检测**只拒绝、不改写**——删字符会把 `amount<`
+     * 折叠成 `amount`，攻击载荷借此覆盖正常业务值。
      */
-    public function test_sanitizes_injected_request_keys_before_reaching_application(): void
+    public function test_rejects_dirty_keys_before_reaching_application(): void
     {
         $captured = null;
 
@@ -119,20 +118,93 @@ final class WafMiddlewareTest extends TestCase
             return response()->json(['ok' => true]);
         });
 
-        $this->postJson('/api/__waf_key_probe', [
+        $response = $this->postJson('/api/__waf_key_probe', [
             "evil'; system('id'); //" => 'v1',
             '<script>' => 'v2',
             'normal_key' => 'v3',
         ]);
 
-        self::assertNotNull($captured, '探针未被调用');
-        self::assertArrayHasKey('normal_key', $captured, '合法键被误伤');
-        self::assertArrayNotHasKey("evil'; system('id'); //", $captured);
-        self::assertArrayNotHasKey('<script>', $captured);
-        self::assertSame('v1', $captured['evil; system(id); //'] ?? null);
-        self::assertSame('v2', $captured['script'] ?? null);
+        $response->assertStatus(400)->assertJsonPath('code', 40009);
+        self::assertNull($captured, '脏键请求穿透到了业务探针');
     }
 
+    /**
+     * L1 检测到键名折叠冲突（`amount<` 净化后会折叠成 `amount` 覆盖业务值）
+     * 同样拒绝，即便请求里同时带着合法键。
+     */
+    public function test_rejects_keys_that_would_fold_into_business_fields(): void
+    {
+        $captured = null;
+
+        Route::middleware('api')->post('/api/__waf_fold_probe', function (Request $request) use (&$captured) {
+            $captured = $request->all();
+
+            return response()->json(['ok' => true]);
+        });
+
+        $this->postJson('/api/__waf_fold_probe', [
+            'amount' => '100',
+            'amount<' => '0',
+        ]);
+
+        self::assertNull($captured, '键名折叠冲突的请求穿透到了业务探针');
+    }
+
+    /**
+     * 关键回归：键名检测只看**键**，绝不能改动**值**。
+     *
+     * 值里合法包含 < > ' \ 的场景很多（口令、Markdown 正文、RSA 私钥、支付签名），
+     * 值被改写会造成登录失败、内容损坏乃至支付验签失败。键干净、值带特殊字符的
+     * 请求必须原样到达业务。
+     */
+    public function test_clean_keys_with_special_values_reach_application_unchanged(): void
+    {
+        $captured = null;
+        $payload = [
+            'password' => "P@ss'w<o>rd\\x",
+            'sign' => 'abc+/=def',
+            'content' => "# 标题\n```html\n<script>alert(1)</script>\n```",
+        ];
+
+        Route::middleware('api')->post('/api/__waf_value_probe', function (Request $request) use (&$captured) {
+            $captured = $request->all();
+
+            return response()->json(['ok' => true]);
+        });
+
+        $response = $this->postJson('/api/__waf_value_probe', $payload);
+
+        $response->assertStatus(200);
+        self::assertNotNull($captured, '探针未被调用');
+        foreach ($payload as $key => $expected) {
+            self::assertSame($expected, $captured[$key] ?? null, "值被改写：{$key}");
+        }
+    }
+
+    /**
+     * 超过深度上限的嵌套里即便只有合法键名也整体拒绝（fail-closed）：
+     * 深层键名从未被检查，静默放行等于把深层变成免检区。
+     */
+    public function test_rejects_requests_nested_beyond_depth_limit(): void
+    {
+        $captured = null;
+
+        Route::middleware('api')->post('/api/__waf_deep_probe', function (Request $request) use (&$captured) {
+            $captured = $request->all();
+
+            return response()->json(['ok' => true]);
+        });
+
+        $deep = 'innocent';
+        for ($i = 0; $i < 30; $i++) {
+            $deep = ['level' => $deep];
+        }
+
+        $response = $this->postJson('/api/__waf_deep_probe', ['data' => $deep]);
+
+        $response->assertStatus(400)->assertJsonPath('code', 40009);
+        self::assertNull($captured, '超深嵌套请求穿透到了业务探针');
+    }
     /**
      * 关键回归：键名净化绝不能改动**值**。
      *
