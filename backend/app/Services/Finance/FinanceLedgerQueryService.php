@@ -2,6 +2,7 @@
 
 namespace App\Services\Finance;
 
+use App\Support\SqlLike;
 use App\Constants\FinanceLedgerEventType;
 use App\Constants\InvoiceStatus;
 use App\Constants\InvoiceType;
@@ -367,12 +368,12 @@ class FinanceLedgerQueryService
                 $query->where('user_id', (int) $keyword);
             } else {
                 $invoiceIds = Invoice::query()
-                    ->where('invoice_no', 'like', '%'.$keyword.'%')
+                    ->where('invoice_no', 'like', SqlLike::contains($keyword))
                     ->pluck('id');
                 $paymentIdsFromInvoice = Payment::query()->whereIn('invoice_id', $invoiceIds)->pluck('id');
 
                 $paymentIds = Payment::query()
-                    ->where('payment_no', 'like', '%'.$keyword.'%')
+                    ->where('payment_no', 'like', SqlLike::contains($keyword))
                     ->pluck('id');
                 $invoiceIdsFromPayment = Payment::query()->whereIn('id', $paymentIds)->whereNotNull('invoice_id')->pluck('invoice_id');
 
